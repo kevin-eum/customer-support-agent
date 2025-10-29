@@ -11,3 +11,6 @@ dependencies = [
     "sounddevice>=0.5.2",
     "streamlit>=1.48.1",
 ]
+
+[tool.uv]
+package-mode = false

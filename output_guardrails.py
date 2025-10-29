@@ -1,3 +1,11 @@
+"""
+Output guardrails for customer support agents.
+
+This module implements output guardrails to ensure agents only provide
+information appropriate to their domain (e.g., technical agents shouldn't
+discuss billing).
+"""
+
 from agents import (
     Agent,
     output_guardrail,
@@ -6,6 +14,9 @@ from agents import (
     GuardrailFunctionOutput,
 )
 from models import TechnicalOutputGuardRailOutput, UserAccountContext
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 technical_output_guardrail_agent = Agent(
@@ -27,9 +38,11 @@ technical_output_guardrail_agent = Agent(
 @output_guardrail
 async def technical_output_guardrail(
     wrapper: RunContextWrapper[UserAccountContext],
-    agent: Agent,
+    agent: Agent[UserAccountContext],
     output: str,
-):
+) -> GuardrailFunctionOutput:
+    logger.debug(f"Running output guardrail for agent '{agent.name}'")
+
     result = await Runner.run(
         technical_output_guardrail_agent,
         output,
@@ -43,6 +56,16 @@ async def technical_output_guardrail(
         or validation.contains_billing_data
         or validation.contains_account_data
     )
+
+    if triggered:
+        logger.warning(
+            f"Output guardrail triggered for agent '{agent.name}' - "
+            f"Off-topic: {validation.contains_off_topic}, "
+            f"Billing: {validation.contains_billing_data}, "
+            f"Account: {validation.contains_account_data}"
+        )
+    else:
+        logger.debug(f"Output guardrail passed for agent '{agent.name}'")
 
     return GuardrailFunctionOutput(
         output_info=validation,

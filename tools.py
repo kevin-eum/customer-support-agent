@@ -1,8 +1,25 @@
+"""
+Tools for customer support agents.
+
+This module provides function tools for technical support, billing,
+order management, and account management operations.
+"""
+
 import streamlit as st
 from agents import function_tool, AgentHooks, Agent, Tool, RunContextWrapper
 from models import UserAccountContext
 import random
 from datetime import datetime, timedelta
+import config
+import constants
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+def get_email_or_default(context: UserAccountContext) -> str:
+    """Return the customer's email or a default message if not set."""
+    return context.email if context.email else "your registered email"
 
 
 # =============================================================================
@@ -95,14 +112,24 @@ def escalate_to_engineering(
         issue_summary: Brief summary of the technical issue
         priority: Priority level (low, medium, high, critical)
     """
-    ticket_id = f"ENG-{random.randint(10000, 99999)}"
+    ticket_id = f"ENG-{random.randint(constants.TICKET_ID_MIN, constants.TICKET_ID_MAX)}"
+    response_hours = (
+        config.ENGINEERING_RESPONSE_HOURS_PREMIUM
+        if context.is_premium_customer()
+        else config.ENGINEERING_RESPONSE_HOURS_BASIC
+    )
+
+    logger.info(
+        f"Engineering escalation created - Customer: {context.customer_id}, "
+        f"Ticket: {ticket_id}, Priority: {priority}, Issue: {issue_summary[:50]}..."
+    )
 
     return f"""
 🚀 Issue escalated to Engineering Team
 📋 Ticket ID: {ticket_id}
 ⚡ Priority: {priority.upper()}
 📝 Summary: {issue_summary}
-🕐 Expected response: {2 if context.is_premium_customer() else 4} hours
+🕐 Expected response: {response_hours} hours
     """.strip()
 
 
@@ -140,8 +167,31 @@ def process_refund_request(
         refund_amount: Amount to refund
         reason: Reason for the refund
     """
-    processing_days = 3 if context.is_premium_customer() else 5
-    refund_id = f"REF-{random.randint(100000, 999999)}"
+    # Input validation
+    if refund_amount <= 0:
+        logger.warning(f"Refund validation failed: amount <= 0 for customer {context.customer_id}")
+        return constants.ERROR_REFUND_AMOUNT_ZERO
+    if refund_amount > config.MAX_REFUND_AMOUNT:
+        logger.warning(
+            f"Refund validation failed: amount ${refund_amount} exceeds max "
+            f"for customer {context.customer_id}"
+        )
+        return constants.ERROR_REFUND_AMOUNT_MAX
+    if not reason or not reason.strip():
+        logger.warning(f"Refund validation failed: no reason for customer {context.customer_id}")
+        return constants.ERROR_REFUND_REASON_REQUIRED
+
+    processing_days = (
+        config.REFUND_PROCESSING_DAYS_PREMIUM
+        if context.is_premium_customer()
+        else config.REFUND_PROCESSING_DAYS_BASIC
+    )
+    refund_id = f"REF-{random.randint(constants.REFUND_ID_MIN, constants.REFUND_ID_MAX)}"
+
+    logger.info(
+        f"Refund processed - Customer: {context.customer_id}, "
+        f"Refund ID: {refund_id}, Amount: ${refund_amount}, Reason: {reason[:30]}..."
+    )
 
     return f"""
 ✅ Refund request processed
@@ -164,7 +214,7 @@ def update_payment_method(context: UserAccountContext, payment_type: str) -> str
     return f"""
 💳 Payment method update initiated
 📋 Type: {payment_type.replace('_', ' ').title()}
-🔒 Secure link sent to: {context.email}
+🔒 Secure link sent to: {get_email_or_default(context)}
 ⏰ Link expires in: 24 hours
 ✅ No interruption to current service
     """.strip()
@@ -181,12 +231,20 @@ def apply_billing_credit(
         credit_amount: Amount of credit to apply
         reason: Reason for the credit
     """
+    # Input validation
+    if credit_amount <= 0:
+        return constants.ERROR_CREDIT_AMOUNT_ZERO
+    if credit_amount > config.MAX_CREDIT_AMOUNT:
+        return constants.ERROR_CREDIT_AMOUNT_MAX
+    if not reason or not reason.strip():
+        return constants.ERROR_CREDIT_REASON_REQUIRED
+
     return f"""
 🎁 Account credit applied
 💰 Credit amount: ${credit_amount}
 📝 Reason: {reason}
 ⚡ Applied to account: {context.customer_id}
-📧 Confirmation sent to: {context.email}
+📧 Confirmation sent to: {get_email_or_default(context)}
     """.strip()
 
 
@@ -203,18 +261,28 @@ def lookup_order_status(context: UserAccountContext, order_number: str) -> str:
     Args:
         order_number: Customer's order number
     """
-    statuses = ["processing", "shipped", "in_transit", "delivered"]
-    current_status = random.choice(statuses)
+    # Input validation
+    if not order_number or not order_number.strip():
+        return constants.ERROR_ORDER_NUMBER_REQUIRED
+    if len(order_number) < 3:
+        return constants.ERROR_ORDER_NUMBER_INVALID
 
-    tracking_number = f"1Z{random.randint(100000, 999999)}"
-    estimated_delivery = datetime.now() + timedelta(days=random.randint(1, 5))
+    current_status = random.choice(constants.ORDER_STATUSES)
+
+    tracking_number = f"1Z{random.randint(constants.TRACKING_NUMBER_MIN, constants.TRACKING_NUMBER_MAX)}"
+    estimated_delivery = datetime.now() + timedelta(
+        days=random.randint(
+            constants.DELIVERY_ESTIMATE_MIN_DAYS,
+            constants.DELIVERY_ESTIMATE_MAX_DAYS
+        )
+    )
 
     return f"""
 📦 Order Status: {order_number}
 🏷️ Status: {current_status.title()}
 🚚 Tracking: {tracking_number}
 📅 Estimated delivery: {estimated_delivery.strftime('%B %d, %Y')}
-📍 Shipping to: {context.email}
+📍 Shipping to: {get_email_or_default(context)}
     """.strip()
 
 
@@ -230,8 +298,12 @@ def initiate_return_process(
         return_reason: Reason for return
         items: Items being returned
     """
-    return_id = f"RET-{random.randint(100000, 999999)}"
-    return_label_fee = 0 if context.is_premium_customer() else 5.99
+    return_id = f"RET-{random.randint(constants.RETURN_ID_MIN, constants.RETURN_ID_MAX)}"
+    return_label_fee = (
+        config.RETURN_LABEL_FEE_PREMIUM
+        if context.is_premium_customer()
+        else config.RETURN_LABEL_FEE_BASIC
+    )
 
     return f"""
 📦 Return initiated
@@ -239,8 +311,8 @@ def initiate_return_process(
 📋 Order: {order_number}
 📝 Items: {items}
 💰 Return label fee: ${return_label_fee}
-📧 Return label sent to: {context.email}
-⏰ Return window: 30 days
+📧 Return label sent to: {get_email_or_default(context)}
+⏰ Return window: {config.RETURN_WINDOW_DAYS} days
     """.strip()
 
 
@@ -259,7 +331,7 @@ def schedule_redelivery(
 🚚 Redelivery scheduled
 📦 Tracking: {tracking_number}
 📅 New delivery date: {preferred_date}
-🏠 Address confirmed: {context.email}
+🏠 Address confirmed: {get_email_or_default(context)}
 📞 Driver will call 30 minutes before delivery
     """.strip()
 
@@ -273,14 +345,14 @@ def expedite_shipping(context: UserAccountContext, order_number: str) -> str:
         order_number: Order to expedite
     """
     if not context.is_premium_customer():
-        return "❌ Expedited shipping upgrade requires Premium membership"
+        return constants.ERROR_PREMIUM_REQUIRED
 
     return f"""
 ⚡ Shipping expedited
 📦 Order: {order_number}
 🚀 Upgraded to: Next-day delivery
 💰 No additional charge (Premium benefit)
-📧 Updated tracking sent to: {context.email}
+📧 Updated tracking sent to: {get_email_or_default(context)}
     """.strip()
 
 
@@ -297,13 +369,13 @@ def reset_user_password(context: UserAccountContext, email: str) -> str:
     Args:
         email: Email address to send reset instructions
     """
-    reset_token = f"RST-{random.randint(100000, 999999)}"
+    reset_token = f"RST-{random.randint(constants.RESET_TOKEN_MIN, constants.RESET_TOKEN_MAX)}"
 
     return f"""
 🔐 Password reset initiated
 📧 Reset link sent to: {email}
 🔗 Reset token: {reset_token}
-⏰ Link expires in: 1 hour
+⏰ Link expires in: {config.PASSWORD_RESET_EXPIRY_HOURS} hour
 🛡️ For security, link is single-use only
     """.strip()
 
@@ -316,13 +388,13 @@ def enable_two_factor_auth(context: UserAccountContext, method: str = "app") -> 
     Args:
         method: 2FA method (app, sms, email)
     """
-    setup_code = f"2FA-{random.randint(100000, 999999)}"
+    setup_code = f"2FA-{random.randint(constants.TWO_FA_CODE_MIN, constants.TWO_FA_CODE_MAX)}"
 
     return f"""
 🔒 Two-Factor Authentication Setup
 📱 Method: {method.upper()}
 🔑 Setup code: {setup_code}
-📧 Instructions sent to: {context.email}
+📧 Instructions sent to: {get_email_or_default(context)}
 ⚡ Enhanced security activated
     """.strip()
 
@@ -338,14 +410,22 @@ def update_account_email(
         old_email: Current email address
         new_email: New email address
     """
-    verification_code = f"VER-{random.randint(100000, 999999)}"
+    # Input validation
+    if not old_email or not new_email:
+        return constants.ERROR_EMAIL_REQUIRED
+    if "@" not in old_email or "@" not in new_email:
+        return constants.ERROR_EMAIL_INVALID
+    if old_email == new_email:
+        return constants.ERROR_EMAIL_SAME
+
+    verification_code = f"VER-{random.randint(constants.VERIFICATION_CODE_MIN, constants.VERIFICATION_CODE_MAX)}"
 
     return f"""
 📧 Email update requested
 📤 From: {old_email}
 📥 To: {new_email}
 🔐 Verification code: {verification_code}
-⏰ Code expires in: 30 minutes
+⏰ Code expires in: {config.EMAIL_VERIFICATION_EXPIRY_MINUTES} minutes
 ✅ Change will be activated after verification
     """.strip()
 
@@ -361,14 +441,19 @@ def deactivate_account(
         reason: Reason for account deactivation
         feedback: Optional feedback from customer
     """
+    logger.warning(
+        f"Account deactivation initiated - Customer: {context.customer_id}, "
+        f"Reason: {reason}, Feedback: {feedback[:30] if feedback else 'None'}..."
+    )
+
     return f"""
 ⚠️ Account deactivation initiated
 👤 Account: {context.customer_id}
 📝 Reason: {reason}
 💬 Feedback: {feedback if feedback else 'None provided'}
 ⏰ Account will be deactivated in 24 hours
-🔄 Can be reactivated within 30 days
-📧 Confirmation sent to: {context.email}
+🔄 Can be reactivated within {config.ACCOUNT_REACTIVATION_DAYS} days
+📧 Confirmation sent to: {get_email_or_default(context)}
     """.strip()
 
 
@@ -380,19 +465,20 @@ def export_account_data(context: UserAccountContext, data_types: str) -> str:
     Args:
         data_types: Types of data to export (profile, orders, billing, etc.)
     """
-    export_id = f"EXP-{random.randint(100000, 999999)}"
+    export_id = f"EXP-{random.randint(constants.EXPORT_ID_MIN, constants.EXPORT_ID_MAX)}"
 
     return f"""
 📊 Data export requested
 🔗 Export ID: {export_id}
 📋 Data types: {data_types}
-⏱️ Processing time: 2-4 hours
-📧 Download link will be sent to: {context.email}
-🔒 Link expires in: 7 days
+⏱️ Processing time: {constants.DATA_EXPORT_PROCESSING_MIN_HOURS}-{constants.DATA_EXPORT_PROCESSING_MAX_HOURS} hours
+📧 Download link will be sent to: {get_email_or_default(context)}
+🔒 Link expires in: {config.DATA_EXPORT_LINK_EXPIRY_DAYS} days
     """.strip()
 
 
 class AgentToolUsageLoggingHooks(AgentHooks):
+    """Custom hooks for logging and displaying agent tool usage in Streamlit."""
 
     async def on_tool_start(
         self,
@@ -400,6 +486,7 @@ class AgentToolUsageLoggingHooks(AgentHooks):
         agent: Agent[UserAccountContext],
         tool: Tool,
     ):
+        logger.debug(f"Agent '{agent.name}' starting tool: {tool.name}")
         with st.sidebar:
             st.write(f"🔧 **{agent.name}** starting tool: `{tool.name}`")
 
@@ -410,6 +497,7 @@ class AgentToolUsageLoggingHooks(AgentHooks):
         tool: Tool,
         result: str,
     ):
+        logger.debug(f"Agent '{agent.name}' completed tool: {tool.name}")
         with st.sidebar:
             st.write(f"🔧 **{agent.name}** used tool: `{tool.name}`")
             st.code(result)
@@ -420,6 +508,7 @@ class AgentToolUsageLoggingHooks(AgentHooks):
         agent: Agent[UserAccountContext],
         source: Agent[UserAccountContext],
     ):
+        logger.info(f"Agent handoff in hook: {source.name} -> {agent.name}")
         with st.sidebar:
             st.write(f"🔄 Handoff: **{source.name}** → **{agent.name}**")
 
@@ -428,6 +517,7 @@ class AgentToolUsageLoggingHooks(AgentHooks):
         context: RunContextWrapper[UserAccountContext],
         agent: Agent[UserAccountContext],
     ):
+        logger.info(f"Agent '{agent.name}' activated for customer {context.context.customer_id}")
         with st.sidebar:
             st.write(f"🚀 **{agent.name}** activated")
 
@@ -437,5 +527,6 @@ class AgentToolUsageLoggingHooks(AgentHooks):
         agent: Agent[UserAccountContext],
         output,
     ):
+        logger.info(f"Agent '{agent.name}' completed for customer {context.context.customer_id}")
         with st.sidebar:
             st.write(f"🏁 **{agent.name}** completed")

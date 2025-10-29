@@ -36,3 +36,7 @@ logs/
 
 # UV
 .uv/
+
+# Keep pyproject.toml local only (use requirements.txt for deployment)
+pyproject.toml
+uv.lock
